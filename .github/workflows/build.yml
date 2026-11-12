@@ -99,10 +99,21 @@ jobs:
 
       - name: Add 14 GiB swap
         run: |
-          sudo fallocate -l 14G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # iNWEB: the link needs swap on a 16 GB runner (they used -j6 + 14 GiB).
+          # The runner already has its own active swapfile at /swapfile:
+          # fallocate on an active swapfile fails ("Text file busy", run #14).
+          # Use a distinct path so we never collide with the runner's swap.
+          # Best-effort: if swap cannot be added, warn and continue — the
+          # stripped link may still fit in 16 GB RAM, and the build itself
+          # is what the hinge is testing, not the swap.
+          SWAPFILE=/swapfile-daf
+          if [ -f "$SWAPFILE" ]; then sudo swapoff "$SWAPFILE" 2>/dev/null || true; sudo rm -f "$SWAPFILE"; fi
+          if sudo fallocate -l 14G "$SWAPFILE" && sudo chmod 600 "$SWAPFILE" && sudo mkswap "$SWAPFILE" && sudo swapon "$SWAPFILE"; then
+            echo "Swap added: $SWAPFILE (14 GiB)"
+          else
+            echo "WARNING: could not add swap — continuing without it." >&2
+            sudo rm -f "$SWAPFILE" 2>/dev/null || true
+          fi
           free -h
 
       - name: Fetch Chromium + apply Bare patches
