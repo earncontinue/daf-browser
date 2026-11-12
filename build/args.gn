@@ -1,0 +1,55 @@
+# DAF Browser — minimal release GN config (stripped, arm64-only).
+#
+# This is the configuration the $0 hinge experiment tests: can this stripped
+# release link complete on a GitHub Actions free runner (4 vCPU / 16 GB RAM)?
+# The link budgets, read from Chromium's own build/toolchain/concurrent_links.gni:
+#   stripped release link  4-6 GB   <- what this config targets
+#   debug link            25 GB     <- what iNWEB's proven debug build needed
+#   official ThinLTO link 30-60 GB <- does NOT fit a free runner
+#
+# Each argument below is doing one job. Nothing here is decorative.
+#
+# --- target -----------------------------------------------------------------
+# Android, arm64 only. One ABI = one out/ directory = one build chain.
+# (A second ABI would be a second, separate chain.)
+target_os = "android"
+target_cpu = "arm64"
+
+# --- release, stripped --------------------------------------------------------
+# A real release build (not debug), with all symbol levels at zero.
+# symbol_level=0 is what makes the link small enough to attempt at all.
+is_debug = false
+is_component_build = false
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+
+# --- link + optimisation, all off -------------------------------------------
+# ThinLTO off: the official default that would push the link to 30-60 GB.
+# PGO off: chrome_pgo_phase=0 disables profile-guided optimisation.
+# concurrent_links=1: only one link at a time, so the link never competes
+# with another link (or with compiles) for the runner's 16 GB.
+use_thin_lto = false
+chrome_pgo_phase = 0
+concurrent_links = 1
+
+# --- the point of the fork ----------------------------------------------------
+# Enable the desktop extension platform on Android (Kiwi/Bare approach).
+# The cost of this flag on build time/RAM is UNVERIFIED (no source found);
+# the hinge measures the real build, it does not assume the cost.
+enable_extensions = true
+
+# --- official build: deliberately OFF for the hinge --------------------------
+# is_official_build=true re-enables official defaults (including ThinLTO),
+# which is exactly what this config is trying to avoid. The hinge therefore
+# tests the stripped, non-official release config. Whether GN accepts this
+# stripped config WITH is_official_build=true is a separate, later experiment
+# (see README.md, "Open questions") — it is NOT what the hinge answers.
+is_official_build = false
+
+# --- version overrides (appended by scripts/configure.sh) --------------------
+# android_override_version_code and android_override_version_name are plain
+# declare_args in build/config/android/config.gni (Bare's BUILDING.md).
+# configure.sh computes them from VERSION and appends them to
+# out/daf-release/args.gn, then re-runs gn gen. They are NOT written here,
+# because they are derived values, not configuration.
