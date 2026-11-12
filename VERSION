@@ -1,0 +1,14 @@
+# DAF Browser (Chromium fork) — own version, independent of the Chromium it is built on.
+#
+# BUILD increments on every published artifact, including two builds of the
+# same version. It is what makes versionCode move, and versionCode is the only
+# thing Android looks at when deciding whether one APK may replace another.
+#
+# Follows Bare Browser's VERSION convention (BareBrowser/bare-browser).
+MAJOR=1
+MINOR=0
+PATCH=0
+BUILD=1
+
+# stable. Appears in the version name and nowhere else.
+CHANNEL=stable
