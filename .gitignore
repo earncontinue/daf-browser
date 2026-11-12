@@ -1,0 +1,27 @@
+# DAF Browser fork — never commit the Chromium tree, build output, or secrets.
+#
+# The Chromium checkout (~100 GB), depot_tools, and the Bare reference clone
+# live only on build infrastructure (a GitHub runner, or a local build host).
+# They are fetched by scripts/fetch.sh and must never be pushed to this repo.
+chromium/
+depot_tools/
+bare/
+out/
+state-in/
+state-out/
+state.tar.zst
+*-logs/
+*.log
+*.apk
+*.aab
+*.keystore
+*.jks
+*.p12
+exchange/
+.DS_Store
+
+# NOTE: no hinge verdict markers are committed to this repo. The verdict
+# (HINGE_PASSED / HINGE_TIMEOUT / HINGE_DEAD, and the hop verdicts) lives
+# as the `daf-verdict` workflow artifact on the run that produced it.
+# build.yml gates on that artifact (via the previous run's ID), not on a
+# file in the repo — so there is nothing here to un-ignore.
