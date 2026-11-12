@@ -1,0 +1,28 @@
+# DAF Browser — pinned Chromium + reference revisions.
+#
+# Read by scripts/fetch.sh. Change only with a deliberate rebase decision.
+# Every value below was verified live on 12 Nov 2026 (see README.md).
+#
+# Chromium 157.0.8103.46, the revision Bare Browser 2.0.3 is built on.
+CHROMIUM_VERSION=157.0.8103.46
+CHROMIUM_COMMIT=800628ad1ca1fd0c51e3b43b5b2bca081e81c3f6
+CHROMIUM_BRANCH_HEADS=refs/branch-heads/8103_38@{#3}
+CHROMIUM_BRANCHED_FROM=refs/heads/main@{#1717349}
+#
+# Bare Browser — the patch series this fork starts from.
+# Repository: https://github.com/BareBrowser/bare-browser (HTTP 200, 12 Nov 2026)
+# Default branch: main. Licence: BSD-3-Clause. Not archived.
+BARE_REPO=https://github.com/BareBrowser/bare-browser
+BARE_REV=c98b94e77781f9d6c3bb42af3a34664f22b4c45d
+BARE_VERSION=2.0.3
+BARE_PATCHES=298
+#
+# iNWEB-Browser — the proven $0 chained-build recipe this workflow is modelled on.
+# Repository: https://github.com/iNWEB-Official/iNWEB-Browser (HTTP 200, 12 Nov 2026)
+# (Correction: an earlier research report cited https://github.com/iNWEB-Browser,
+# which does not exist — 404, no such user/org. The real repository is
+# iNWEB-Official/iNWEB-Browser.)
+# Chromium 154.0.8037.21, chrome_public_apk, arm64, debug: 14 chained hops,
+# ~45 h runner time, APK 689 MB, sha256-verified.
+INWEB_REPO=https://github.com/iNWEB-Official/iNWEB-Browser
+INWEB_CHROMIUM=154.0.8037.21
