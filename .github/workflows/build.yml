@@ -74,6 +74,20 @@ jobs:
       - name: Checkout this repo
         uses: actions/checkout@v4
 
+      - name: Check whether the release keystore secret exists
+        id: keystore
+        run: |
+          # The secrets context cannot be used in an `if:` condition
+          # (GitHub rejects the workflow file: "Unrecognized named-value:
+          # 'secrets'"), so presence is tested here in a shell step and
+          # the result is carried as a step output. The secret value is
+          # never printed.
+          if [ -n "${{ secrets.DAF_RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Free disk space
         run: |
           df -h
@@ -85,7 +99,6 @@ jobs:
 
       - name: Add 14 GiB swap
         run: |
-          # iNWEB: the link needs swap on a 16 GB runner (they used -j6 + 14 GiB).
           sudo fallocate -l 14G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
@@ -195,7 +208,7 @@ jobs:
           } > verdict.txt
 
       - name: Sign the APK (only if the release keystore secrets exist)
-        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 != ''
+        if: env.BUILD_EC == '0' && steps.keystore.outputs.present == 'true'
         run: |
           KEYSTORE_TMP="$(mktemp)"
           trap 'rm -f "$KEYSTORE_TMP"' EXIT
@@ -212,7 +225,7 @@ jobs:
           bash scripts/package-release.sh "$OUT_DIR" "$KEYSTORE_TMP" "DAF-Browser-fork-$MAJOR.$MINOR.$PATCH-arm64.apk"
 
       - name: Upload signed APK
-        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 != ''
+        if: env.BUILD_EC == '0' && steps.keystore.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: daf-release-apk
@@ -221,13 +234,13 @@ jobs:
           retention-days: 90
 
       - name: Upload unsigned APK (no keystore secrets yet)
-        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 == ''
+        if: env.BUILD_EC == '0' && steps.keystore.outputs.present == 'false'
         run: |
           cp "$OUT_DIR/apks/ChromePublic.apk" DAF-Browser-fork-unsigned.apk
           echo "NOTE: no release keystore secrets are set, so this APK is unsigned." >> verdict.txt
           echo "Add DAF_RELEASE_KEYSTORE_BASE64 + DAF_KEYSTORE_PASS + DAF_KEY_ALIAS + DAF_KEY_PASS as repository secrets, then sign the artifact locally (see BUILDING.md)." >> verdict.txt
       - name: Upload unsigned APK artifact
-        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 == ''
+        if: env.BUILD_EC == '0' && steps.keystore.outputs.present == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: daf-release-apk-unsigned
