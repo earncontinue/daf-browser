@@ -81,7 +81,12 @@ export DEPOT_TOOLS_METRICS=0
 # 100 GB floor in the docs covers checkout + build output + toolchains).
 if [ ! -d chromium/src ]; then
   echo "Fetching Chromium (this is the long step)..."
-  fetch --no-history --nohooks android
+  # `fetch android` checks the `src` solution out into the CURRENT directory,
+  # so it must run from inside $WORKSPACE/chromium — run #15 ran it from
+  # $WORKSPACE, which put the tree at $WORKSPACE/src, and `cd chromium/src`
+  # then failed ("No such file or directory").
+  mkdir -p chromium
+  ( cd chromium && fetch --no-history --nohooks android )
 fi
 cd chromium/src
 git fetch --depth 1 origin "$CHROMIUM_COMMIT" --quiet
