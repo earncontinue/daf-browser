@@ -1,0 +1,296 @@
+# =============================================================================
+# DAF Browser fork — THE HINGE.
+#
+# This workflow runs FIRST, before any chained build. It proves exactly one
+# thing: that the stripped release link of chrome_public_apk completes on a
+# GitHub free runner (4 vCPU / 16 GB, 6 h job cap). Everything else in the
+# $0 experiment depends on that link.
+#
+# Scope: fetch (Chromium at the pinned commit + Bare patches) -> configure
+# (minimal release config, arm64-only) -> build chrome_public_apk in ONE job
+# with a 265-minute time box. Smallest possible scope: one target, one ABI,
+# no extra features.
+#
+# Three outcomes (the verdict is uploaded as the `daf-verdict` artifact):
+#   HINGE_PASSED  — exit 0 and the APK exists. The link completed on a free
+#                    runner. The $0 path is PROVEN. The APK is signed (if the
+#                    release keystore secrets exist) and uploaded.
+#   HINGE_TIMEOUT — the 265-minute time box expired before the link finished.
+#                    This is the EXPECTED outcome for a full Chromium build
+#                    (iNWEB needed 14 chained hops). It is NOT a failure and
+#                    does NOT kill the $0 path: the partial state is packaged
+#                    and the chained build workflow resumes from it. The link
+#                    itself is then proven by whichever hop reaches it.
+#   HINGE_DEAD    — a REAL build failure (exit code other than 0 or 124), or
+#                    the state no longer fits the upload scheme (HINGE_BLOCKED).
+#                    The $0 path is DEAD in this form. The build workflow
+#                    refuses to run from a HINGE_DEAD / HINGE_BLOCKED verdict.
+#
+# Trigger: Actions -> "Hinge — stripped release link on a free runner" ->
+# Run workflow. Only one run at a time (concurrency group `daf-build`).
+# =============================================================================
+name: Hinge — stripped release link on a free runner
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: daf-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  WORKSPACE: chromium
+  OUT_DIR: chromium/chromium/src/out/daf-release
+  HOP_MINUTES: "265"
+
+jobs:
+  hinge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h
+          # The hosted Android SDK is removed: the build uses Chromium's own
+          # SDK from the checkout (third_party/android_sdk), not the hosted one.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          df -h
+
+      - name: Add 14 GiB swap
+        run: |
+          # iNWEB: the link needs swap on a 16 GB runner (they used -j6 + 14 GiB).
+          sudo fallocate -l 14G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Fetch Chromium + apply Bare patches
+        run: |
+          bash scripts/fetch.sh
+          echo "$GITHUB_WORKSPACE/chromium/depot_tools" >> "$GITHUB_PATH"
+
+      - name: Normalise tree mtimes to 2020-01-01
+        run: |
+          # A freshly cloned tree has every file stamped "now". On a resume hop
+          # that makes plain ninja rebuild everything (sources newer than the
+          # transferred .o files). Normalising the tree to a fixed old epoch
+          # keeps the transferred out/ artifacts newer, so ninja resumes.
+          # .git is excluded (touching it would invalidate git's stat cache).
+          # out/ is restored AFTER this step, so its mtimes are untouched.
+          find "$WORKSPACE" -path '*/.git' -prune -o -type f -exec touch -h -d '2020-01-01 UTC' {} +
+          echo "mtime normalisation done"
+
+      - name: Install Android build dependencies
+        run: sudo bash chromium/chromium/src/build/install-build-deps.sh --android --no-arm
+
+      - name: Configure (gn gen, minimal release config)
+        run: bash scripts/configure.sh
+
+      - name: Probe dry-run (plan only, no compile)
+        run: |
+          DRYRUN=1 bash scripts/build-hop.sh "$OUT_DIR" 1 | tee hinge-dryrun.log
+
+      - name: Hinge build — chrome_public_apk in one job
+        id: hinge-build
+        run: |
+          # The step itself never fails: the verdict steps below decide what
+          # the exit code means (0 = pass, 124 = expected timeout, else dead).
+          set +e
+          bash scripts/build-hop.sh "$OUT_DIR" "$HOP_MINUTES" 6 2>&1 | tee hinge-build.log
+          EC=${PIPESTATUS[0]}
+          set -e
+          echo "BUILD_EC=$EC" >> "$GITHUB_ENV"
+          echo "build_ec=$EC" >> "$GITHUB_OUTPUT"
+          if [ "$EC" -eq 0 ]; then
+            echo "HINGE: link completed (exit 0)"
+          elif [ "$EC" -eq 124 ]; then
+            echo "HINGE: time box expired (expected for Chromium — the chain resumes from the state)"
+          else
+            echo "HINGE: real build failure (exit $EC)"
+          fi
+          exit 0
+
+      - name: Verdict — PASS (link completed, APK exists)
+        if: env.BUILD_EC == '0'
+        run: |
+          ls -lh "$OUT_DIR/apks/ChromePublic.apk"
+          test -s "$OUT_DIR/apks/ChromePublic.apk"
+          {
+            echo "HINGE_PASSED"
+            echo "The stripped release link completed on a free runner. The \$0 path is proven."
+          } > verdict.txt
+
+      - name: Sign the APK (only if the release keystore secrets exist)
+        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 != ''
+        run: |
+          KEYSTORE_TMP="$(mktemp)"
+          trap 'rm -f "$KEYSTORE_TMP"' EXIT
+          echo "${{ secrets.DAF_RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_TMP"
+          APKSIGNER="$(find chromium/chromium/src/third_party/android_sdk -name apksigner -type f | head -1)"
+          test -n "$APKSIGNER" || { echo "ERROR: apksigner not found in the checkout SDK" >&2; exit 1; }
+          export APKSIGNER
+          export DAF_KEYSTORE_PASS="${{ secrets.DAF_KEYSTORE_PASS }}"
+          export DAF_KEY_ALIAS="${{ secrets.DAF_KEY_ALIAS }}"
+          export DAF_KEY_PASS="${{ secrets.DAF_KEY_PASS }}"
+          MAJOR="$(sed -n 's/^MAJOR=//p' VERSION | tr -d '[:space:]')"
+          MINOR="$(sed -n 's/^MINOR=//p' VERSION | tr -d '[:space:]')"
+          PATCH="$(sed -n 's/^PATCH=//p' VERSION | tr -d '[:space:]')"
+          bash scripts/package-release.sh "$OUT_DIR" "$KEYSTORE_TMP" "DAF-Browser-fork-$MAJOR.$MINOR.$PATCH-arm64.apk"
+
+      - name: Upload signed APK
+        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-release-apk
+          path: DAF-Browser-fork-*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload unsigned APK (no keystore secrets yet)
+        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 == ''
+        run: |
+          cp "$OUT_DIR/apks/ChromePublic.apk" DAF-Browser-fork-unsigned.apk
+          echo "NOTE: no release keystore secrets are set, so this APK is unsigned." >> verdict.txt
+          echo "Add DAF_RELEASE_KEYSTORE_BASE64 + DAF_KEYSTORE_PASS + DAF_KEY_ALIAS + DAF_KEY_PASS as repository secrets, then re-run the hinge (or sign the artifact locally)." >> verdict.txt
+      - name: Upload unsigned APK artifact
+        if: env.BUILD_EC == '0' && secrets.DAF_RELEASE_KEYSTORE_BASE64 == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-release-apk-unsigned
+          path: DAF-Browser-fork-unsigned.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verdict — TIMEOUT (package the partial state for the chain)
+        if: env.BUILD_EC == '124'
+        run: |
+          set +e
+          bash scripts/package-state.sh "$OUT_DIR" state-out
+          EC=$?
+          set -e
+          if [ "$EC" -eq 2 ]; then
+            {
+              echo "HINGE_BLOCKED"
+              echo "The state no longer fits the 8-part (32 GiB) upload scheme. The chain cannot resume. The \$0 path is blocked in this form."
+            } > verdict.txt
+            echo "STATE BLOCKED — see the verdict." >&2
+            exit 1
+          elif [ "$EC" -ne 0 ]; then
+            echo "ERROR: packaging the state failed (exit $EC)" >&2
+            exit "$EC"
+          fi
+          {
+            echo "HINGE_TIMEOUT"
+            echo "The 265-minute time box expired before the link finished. Expected for Chromium. The partial state is packaged; run the chained build workflow with this run's ID to resume."
+          } > verdict.txt
+
+      - name: Upload state parts (timeout case)
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-00
+          path: state-out/part-00
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 01
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-01
+          path: state-out/part-01
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 02
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-02
+          path: state-out/part-02
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 03
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-03
+          path: state-out/part-03
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 04
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-04
+          path: state-out/part-04
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 05
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-05
+          path: state-out/part-05
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 06
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-06
+          path: state-out/part-06
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state part 07
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-part-07
+          path: state-out/part-07
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload state manifest (timeout case)
+        if: env.BUILD_EC == '124'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-state-manifest
+          path: state-out/manifest.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verdict — DEAD (real build failure)
+        if: env.BUILD_EC != '0' && env.BUILD_EC != '124'
+        run: |
+          {
+            echo "HINGE_DEAD"
+            echo "The build failed with exit code $BUILD_EC (not a timeout). The \$0 path is dead in this form — see hinge-build.log. Do not run the chained build workflow."
+          } > verdict.txt
+          echo "HINGE DEAD — see the verdict and the build log." >&2
+          exit 1
+
+      - name: Upload verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daf-verdict
+          path: verdict.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hinge-build-log
+          path: |
+            hinge-build.log
+            hinge-dryrun.log
+          if-no-files-found: ignore
+          retention-days: 90
