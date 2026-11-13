@@ -22,8 +22,34 @@ OUT_NAME="${1:-daf-release}"
 OUT_DIR="$WORKSPACE/chromium/src/out/$OUT_NAME"
 
 [ -d "$WORKSPACE/chromium/src" ] || { echo "ERROR: Chromium tree not found — run scripts/fetch.sh first" >&2; exit 2; }
-[ -d "$WORKSPACE/depot_tools" ] && export PATH="$WORKSPACE/depot_tools:$PATH"
-command -v gn >/dev/null || { echo "ERROR: gn not found (depot_tools not on PATH and no gn installed)" >&2; exit 2; }
+
+# --- gn: use the checkout's own binary, resolved explicitly ------------------
+# depot_tools' `gn` is only a wrapper (gn.py). It finds the real gn binary
+# (src/third_party/gn/gn, CIPD-downloaded during gclient sync) by walking UP
+# from the CURRENT directory to the .gclient file. Run #16 ran `gn gen`
+# from the repo root, where no .gclient exists above, so gn.py printed
+# "gn.py: Unable to find gn in your $PATH" and gn gen failed in 0s — even
+# though `command -v gn` found the wrapper. Fix: resolve the binary
+# explicitly and run it directly (it is the DEPS-pinned gn for this exact
+# Chromium commit), and work from inside the checkout, the way upstream
+# documents ("the script will find the binary in the source tree
+# containing the current directory").
+cd "$WORKSPACE/chromium/src"
+GN_BIN="$WORKSPACE/chromium/src/third_party/gn/gn"
+if [ ! -x "$GN_BIN" ]; then
+  # Fallback: the older buildtools location (newer trees keep it at
+  # buildtools/<platform>/gn/gn; older ones at buildtools/<platform>/gn).
+  GN_BIN="$WORKSPACE/chromium/src/buildtools/linux64/gn/gn"
+  [ -x "$GN_BIN" ] || GN_BIN="$WORKSPACE/chromium/src/buildtools/linux64/gn"
+fi
+if [ ! -x "$GN_BIN" ]; then
+  echo "ERROR: no gn binary in the checkout — gclient sync did not download it" >&2
+  echo "  checked: $WORKSPACE/chromium/src/third_party/gn/gn and buildtools/linux64/gn[/gn]" >&2
+  ls "$WORKSPACE/chromium/src/third_party/gn" 2>/dev/null || echo "  (no third_party/gn dir)" >&2
+  ls "$WORKSPACE/chromium/src/buildtools/linux64" 2>/dev/null || echo "  (no buildtools/linux64 dir)" >&2
+  exit 2
+fi
+echo "gn binary: $GN_BIN"
 
 # --- DAF version (VERSION file; Bare's convention) ---------------------------
 MAJOR="$(sed -n 's/^MAJOR=//p' "$REPO_ROOT/VERSION" | tr -d '[:space:]')"
@@ -43,7 +69,7 @@ echo "DAF version: $VERSION_NAME (versionCode $VERSION_CODE, arm64)"
 
 # --- gn gen ------------------------------------------------------------------
 # Step 1: generate with the base config in build/args.gn.
-gn gen "$OUT_DIR" --args="$(cat "$REPO_ROOT/build/args.gn")" || {
+"$GN_BIN" gen "$OUT_DIR" --args="$(cat "$REPO_ROOT/build/args.gn")" || {
   echo "FATAL: gn gen failed on the base config (see the error above)" >&2
   exit 4
 }
@@ -54,12 +80,12 @@ gn gen "$OUT_DIR" --args="$(cat "$REPO_ROOT/build/args.gn")" || {
   echo "android_override_version_code = $VERSION_CODE"
   echo "android_override_version_name = \"$VERSION_NAME\""
 } >> "$OUT_DIR/args.gn"
-gn gen "$OUT_DIR" || {
+"$GN_BIN" gen "$OUT_DIR" || {
   echo "FATAL: gn gen failed after appending the version overrides" >&2
   exit 4
 }
 
 # --- verify the args that decide the hinge -----------------------------------
 echo "--- args that decide the hinge (must read as below) ---"
-gn args "$OUT_DIR" --list --short 2>/dev/null | grep -E "^(target_os|target_cpu|is_debug|is_component_build|symbol_level|blink_symbol_level|v8_symbol_level|use_thin_lto|chrome_pgo_phase|concurrent_links|enable_extensions|is_official_build|android_override_version_code|android_override_version_name) = " || echo "(warning: could not list args — check the gn version)"
+"$GN_BIN" args "$OUT_DIR" --list --short 2>/dev/null | grep -E "^(target_os|target_cpu|is_debug|is_component_build|symbol_level|blink_symbol_level|v8_symbol_level|use_thin_lto|chrome_pgo_phase|concurrent_links|enable_extensions|is_official_build|android_override_version_code|android_override_version_name) = " || echo "(warning: could not list args — check the gn version)"
 echo "CONFIGURE: PASS (out dir: $OUT_DIR)"
