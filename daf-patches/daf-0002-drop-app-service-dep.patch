@@ -1,0 +1,32 @@
+DAF Browser: drop the app_service dep from chrome/test test_support (run #18 fix)
+
+Root cause (hinge run #18, 14 Nov 2026): gn gen fails in 4s with
+ERROR at //chrome/browser/apps/app_service/BUILD.gn:7:1: Assertion failed.
+assert(!is_android), included from //chrome/test/BUILD.gn:231. That line
+is the deps entry "//chrome/browser/apps/app_service" in
+static_library("test_support"), inside if (enable_extensions). With
+enable_extensions=true on Android, test_support pulls in the desktop-only
+App Service directory, whose BUILD.gn asserts !is_android at its top.
+Upstream Android (enable_extensions=false) never takes the dep; upstream
+main removed it (0 bare app_service deps in main's chrome/test/BUILD.gn).
+The assert itself stays — it is correct for the desktop-only directory.
+
+This patch removes ONLY that one dep line. The other bare app_service line
+(test_support_ui, inside if (!is_android)) is untouched — it is never
+evaluated on Android. The remaining deps in the enable_extensions block
+(web_applications, web_package, webapps, ...) are Android-compatible and
+stay. If gn gen then fails on a further desktop-only dep, the run log
+names it and it gets the same one-line treatment.
+---
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 25dfaa1..8186f25 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -228,7 +228,6 @@ static_library("test_support") {
+
+  if (enable_extensions) {
+    deps += [
+-      "//chrome/browser/apps/app_service",
+      "//chrome/browser/ui/web_applications",
+      "//chrome/browser/ui/web_applications:test_support",
+      "//chrome/browser/ui/web_applications/test:test_support",
