@@ -46,3 +46,28 @@ main is the reference.
 **Honest limit:** if `gn gen` then fails at the next file with the same
 error (another `test()` usage elsewhere in the tree), that file gets the
 same treatment in a follow-up DAF patch — the run log names it.
+
+## daf-0002-drop-app-service-dep.patch (run #18 fix)
+
+**Root cause (hinge run #18, 14 Nov 2026):** `gn gen` fails in 4s with
+`ERROR at //chrome/browser/apps/app_service/BUILD.gn:7:1: Assertion failed.
+assert(!is_android)`, included from `//chrome/test/BUILD.gn:231`. That line
+is the deps entry `"//chrome/browser/apps/app_service"` in
+`static_library("test_support")`, inside `if (enable_extensions)`. With
+`enable_extensions=true` on Android, test_support pulls in the desktop-only
+App Service directory, whose BUILD.gn asserts `!is_android` at its top.
+Upstream Android (`enable_extensions=false`) never takes the dep; upstream
+main removed it (0 bare app_service deps in main's `chrome/test/BUILD.gn`).
+The assert itself stays — it is correct for the desktop-only directory.
+No Bare patch touches `app_service` or `chrome/test/BUILD.gn` (re-verified
+over all 298 patches).
+
+**What the patch does:** removes ONLY that one dep line. The other bare
+app_service line (test_support_ui, inside `if (!is_android)`) is untouched
+— it is never evaluated on Android. The remaining deps in the
+`enable_extensions` block (web_applications, web_package, webapps, ...) are
+Android-compatible and stay. Applies AFTER daf-0001 (its diff is against
+the daf-0001-patched file); fetch.sh applies daf-patches in filename order.
+
+**Honest limit:** if `gn gen` then fails on a further desktop-only dep,
+the run log names it and it gets the same one-line treatment.
