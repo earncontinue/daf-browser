@@ -1,0 +1,157 @@
+DAF Browser: remove allow_circular_includes_from from chrome/test (LSC mirror)
+
+Root cause (hinge run #17, 13 Nov 2026): gn gen fails at
+//chrome/test/BUILD.gn:3620 with "Usage of allow_circular_includes_from is
+not allowed here". The usage sits in test("unit_tests"); on Android the
+test() template expands it into a shared_library named unit_tests__library
+(testing/test.gni:546), which forwards the annotation. GN validates the
+EXPANDED label against allow_circular_includes_from_allowlist (.gn), and
+the allowlist holds //chrome/test:unit_tests but not
+//chrome/test:unit_tests__library. No Bare patch touches these files
+(verified over all 298 patches); the pinned tree is pristine upstream and
+the gn binary is the DEPS-pinned CIPD gn — the pinned commit is in a broken
+window for Android gn gen. Upstream fixed it the same way: current main has
+zero allow_circular_includes_from usages in chrome/test/BUILD.gn and none
+of the five entries in build/circular_includes_untriaged.gni.
+
+This patch removes all 11 usages from chrome/test/BUILD.gn (the failing one
+is unit_tests:3620; the rest are removed in the same pass to match upstream
+main) and the 5 matching allowlist entries (browser_tests,
+interactive_ui_tests, test_support, test_support_ui, unit_tests).
+chrome_test_utils stays. The annotation only affects `gn check`, never
+compilation, so the removal cannot break the ninja build; `gn check --fix`
+was not run (no checkout here) — upstream main is the reference.
+---
+diff --git a/build/circular_includes_untriaged.gni b/build/circular_includes_untriaged.gni
+index 6ce2c62..66c1a95 100644
+--- a/build/circular_includes_untriaged.gni
++++ b/build/circular_includes_untriaged.gni
+@@ -208,11 +208,6 @@ allow_circular_includes_from_untriaged = [
+   "//chrome/browser:browser",
+   "//chrome/installer/util:with_no_strings",
+   "//chrome/test/base:chrome_test_utils",
+-  "//chrome/test:browser_tests",
+-  "//chrome/test:interactive_ui_tests",
+-  "//chrome/test:test_support",
+-  "//chrome/test:test_support_ui",
+-  "//chrome/test:unit_tests",
+   "//chromeos/ash/components/dbus/hermes:hermes_fakes",
+   "//chromeos/ash/components/network:network",
+   "//components/download/public/common:public",
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index f7779bf..25dfaa1 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -151,7 +151,6 @@ if (is_android) {
+ static_library("test_support") {
+   testonly = true
+   defines = []
+-  allow_circular_includes_from = []
+   deps = [
+     "//chrome/browser:browser_features",
+     "//chrome/browser:browser_process_impl",
+@@ -225,8 +224,6 @@ static_library("test_support") {
+ 
+     # TODO(crbug.com/521960574): Fix extension_browsertest.cc and eliminate this
+     # circular dependency.
+-    allow_circular_includes_from +=
+-        [ "//chrome/browser/extensions:test_support" ]
+   }
+ 
+   if (enable_extensions) {
+@@ -415,7 +412,6 @@ static_library("test_support") {
+       "//components/supervised_user/core/browser/android",
+     ]
+ 
+-    allow_circular_includes_from += [ ":test_support_ui_android" ]
+   } else {
+     public_deps += [
+       # Android uses //chrome:chrome_android_core instead of the //chrome/app
+@@ -485,10 +481,6 @@ static_library("test_support") {
+       deps += [ "//chrome/browser/compose" ]
+     }
+ 
+-    allow_circular_includes_from += [
+-      ":test_support_ui",
+-      "//chrome/browser/ui/views/tabs/common:impl",
+-    ]
+   }
+ 
+   if (use_nss_certs) {
+@@ -618,11 +610,6 @@ static_library("test_support") {
+       "//ui/chromeos/resources:resources_grit",
+     ]
+ 
+-    allow_circular_includes_from += [
+-      "//chrome/browser/ash/login/users:test_support",
+-      "//chrome/browser/ash/settings:test_support",
+-      "//chrome/browser/ash/system_web_apps/test_support",
+-    ]
+   }
+ 
+   if (is_win || is_mac || is_linux || is_chromeos) {
+@@ -1675,13 +1662,9 @@ if (!is_android) {
+       "//ui/webui:buildflags",
+     ]
+ 
+-    allow_circular_includes_from = []
+-
+     # password_generation_popup_view_views_browsertest.cc includes
+     # ../browser/ui/views/autofill/popup/popup_pixel_test.h, which is compiled
+     # directly into this target's own sources rather than a separate one.
+-    allow_circular_includes_from +=
+-        [ "//chrome/browser/ui/views/passwords:browser_tests" ]
+ 
+     if (is_mac) {
+       deps += [ "//chrome/app_shim:browser_tests" ]
+@@ -2108,8 +2091,6 @@ if (!is_android) {
+         "//chrome/browser/ui/webui_browser:browser_tests",
+         "//chrome/browser/ui/zoom:browser_tests",
+       ]
+-      allow_circular_includes_from +=
+-          [ "//chrome/browser/ui/lens:browser_tests" ]
+     }
+ 
+     # TODO(crbug.com/353332589): Move this browsertest into
+@@ -3617,11 +3598,6 @@ test("unit_tests") {
+       deps += [ "../browser/enterprise/connectors/test:test_support" ]
+     }
+ 
+-    allow_circular_includes_from = [
+-      "//chrome/browser/web_applications:web_applications_unit_tests",
+-      "//chrome/browser/web_applications/extensions:unit_tests",
+-    ]
+-
+     deps += [
+       "//apps:unit_tests",
+       "//chrome/browser/controlled_frame:unit_tests",
+@@ -3972,14 +3948,6 @@ if (!is_android) {
+ 
+     configs += [ "//build/config:precompiled_headers" ]
+ 
+-    allow_circular_includes_from = [
+-      # TODO(crbug.com/353332589): Remove these circular dependencies when
+-      # remaining blocked headers are fully componentized.
+-      "//chrome/browser/privacy_sandbox:attestations_mixin",
+-      "//chrome/browser/ui/test:dialog",
+-      "//chrome/test/interaction",
+-    ]
+-
+     public_deps = [
+       "//chrome/browser:test_support_ui",
+       "//chrome/browser/notifications:test_support",
+@@ -4372,14 +4340,6 @@ if (!is_android && !is_chromeos_device) {
+     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+     ldflags = []
+ 
+-    allow_circular_includes_from = [
+-      # These targets include ../browser/ui/views/test/view_event_test_base.h,
+-      # which is compiled directly into this target's own sources rather than
+-      # a separate one.
+-      "//chrome/browser/ui/views:interactive_ui_tests",
+-      "//chrome/browser/ui/views/bookmarks:interactive_ui_tests",
+-    ]
+-
+     deps = [
+       ":test_support",
+       ":test_support_ui",
