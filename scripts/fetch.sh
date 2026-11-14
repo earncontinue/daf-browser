@@ -141,6 +141,26 @@ echo "Applying $PATCH_COUNT Bare patches..."
 )
 echo "Patches applied (staged, not committed)."
 
+# --- 5b. Apply DAF's own patches --------------------------------------------
+# DAF fixes that upstream (or Bare) has not made at the pinned revision.
+# Applied AFTER the Bare series, same mechanism (git apply --index), so a
+# DAF patch that conflicts with a Bare patch fails here, clearly, instead
+# of hours later. See daf-patches/README.md for the root cause of each.
+# (Run #17, 13 Nov 2026: gn gen fails on allow_circular_includes_from in
+# chrome/test/BUILD.gn — the Android test() template expands unit_tests
+# into unit_tests__library, whose label is not in the allowlist.)
+DAF_PATCH_COUNT="$(ls "$REPO_ROOT/daf-patches/"*.patch 2>/dev/null | wc -l)"
+if [ "$DAF_PATCH_COUNT" -gt 0 ]; then
+  echo "Applying $DAF_PATCH_COUNT DAF patch(es)..."
+  (
+    cd "$WORKSPACE/chromium/src"
+    git apply --index "$REPO_ROOT/daf-patches/"*.patch
+  )
+  echo "DAF patches applied (staged, not committed)."
+else
+  echo "No DAF patches to apply."
+fi
+
 # --- 6. Verify ---------------------------------------------------------------
 HEAD_SHA="$(git -C "$WORKSPACE/chromium/src" rev-parse HEAD)"
 VERSION="$(sed -n 's/^MAJOR=//p;s/^MINOR=//p;s/^BUILD=//p;s/^PATCH=//p' "$WORKSPACE/chromium/src/chrome/VERSION" 2>/dev/null | paste -sd. || true)"
